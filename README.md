@@ -141,6 +141,33 @@ Source operand is a 4-bit immediate value (0–15) instead of a register.
 
 ---
 
+## Condition Codes
+
+All unary instructions carry a 4-bit condition field (`cccc`). Conditions match the ARM condition code set exactly, in the same encoding order.
+
+| Encoding | Mnemonic | Condition |
+|---|---|---|
+| `0000` | `eq` | Z set |
+| `0001` | `ne` | Z clear |
+| `0010` | `cs` | C set — unsigned higher or same |
+| `0011` | `cc` | C clear — unsigned lower |
+| `0100` | `mi` | N set — negative |
+| `0101` | `pl` | N clear — positive or zero |
+| `0110` | `vs` | V set — overflow |
+| `0111` | `vc` | V clear — no overflow |
+| `1000` | `hi` | C set and Z clear — unsigned higher |
+| `1001` | `ls` | C clear or Z set — unsigned lower or same |
+| `1010` | `ge` | N == V — signed greater or equal |
+| `1011` | `lt` | N != V — signed less than |
+| `1100` | `gt` | Z clear and N == V — signed greater than |
+| `1101` | `le` | Z set or N != V — signed less or equal |
+| `1110` | `al` | Always — unconditional |
+| `1111` | `nv` | Never — executes as nop, useful for runtime patching |
+
+> Signed comparisons (`ge`, `lt`, `gt`, `le`) depend on both N and V together. The flags register must track overflow (V) independently from sign (N).
+
+---
+
 ## Unary Opcodes (`10`)
 
 Unary instructions operate on a single register and carry a 4-bit predicate field for conditional execution.
