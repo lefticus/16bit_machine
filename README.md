@@ -15,78 +15,126 @@ Pure 16 bit design.
 * There are 16 registers
 * Most operations are register<->register operations
 
+Register allocation
 
+tt - opcode type
 
-* opcode: 4bits
-* register (src/dst): 4 bits
-* payload: 8 bits
-* extended: 4 bits
-   * 0: dst indirect
-   * 1: src indirect
-   * 2-3: opcode sub options
- 
-of top 8 bits:
+0? binary opcodes
 
+00 ii 0000
+00 ii 0111 - FPU
 
-1100 0000 - 1111 1111 - are valid load opcodes       (192 - 255)
-0000 0000 - 1011 1111 - are the rest of the opcodes  (0 - 191)
-
-```
-//  im load   11xx
-//
-// dst indirect V
-//  low/high     V
-// load       11xx dst payload
-
-```
-
-0 - 191 - remaining opcodes
-
-```
-# ALU/FPU modes opcode dst src
-#            xx00 00yz dst src
-#
-# xx can be 00, 01, 10
-#
-# y dst indirect
-# z src indirect
-#
-# 48 opcodes remaining
-```
-
-binary
-
-bitwise
-
-xor
-or
-and
-
-arithmetic 
-
-add
-addc
-subc
 fdiv
+fmul
+fmod
 fadd
-sub
-div
-jmp
-cmp 
+fcmp
+fsub
+fmin
+fmax
+
+00 ii 1??? - Immediate mode binary micro ops
+
+00 ii 1000
+00 ii 1111 - Immediate mode micro ops
+
 shl
 shr
 sar
+add
+sub
+and
+cmp
+or
+
+01 ii ???? - 
+
+01 ii 0000
+01 ii 1111 - ALU ops
+
+xor
+addc
+subb
+mul
+div
+mod
+test
+mov
+
+shl
+shr
+sar
+add
+sub
+and
+cmp
+or
+
+
+10 unary opcodes
+
+10 io oooo dddd cccc - FPU
+
+(0-7, conditional)
+
+fneg
+fabs
+fsqrt
+ftoi
+itof
+ffloor
+fceil
+fround
+
+10 io oooo dddd cccc - ALU
+
+(8-27, ALU, conditional)
+
+jmp
+jmprelative
+call
+callrelative
+ret
+push
+pop
+not
 rol
 ror
+clz
+ctz
+popcount
+bswap
+neg
+abs
+sext
+set
+nop
+halt
+
+(28-31, GPU, reserved)
 
 
-unary
 
-not
-jmp <16 types of jumps because of available register>
-  relative
-  absolute
-  
+
+11 prefix - immediate load opcodes
+
+11 ib rrrr pppppppp
+
+11 i0 load of low byte
+11 i1 load of high byte
+
+
+registers:
+
+0000 - always 0
+0001 - always 1
+0010 - ip
+0011 - sp
+0100 - instruction segment
+0101 - address segment
+0110 - stack segment
+0111 - flags
+
 
 ## Decoding
 
