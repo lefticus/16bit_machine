@@ -12,10 +12,11 @@ A machine architecture design and test suite for a pure 16-bit CPU and associate
 | RAM width | 16 bits |
 | Address space | 16 bits (64K words) |
 | Instruction width | 16 bits (exactly 1 word) |
-| Number of registers | 16 |
-| Instruction validity | All 2^16 encodings are valid and defined |
+| Number of registers | 16 (2 hardwired, 2 system, 1 flags, 11 general purpose) |
+| Instruction validity | All 2^16 encodings are valid and defined — no undefined behavior |
 | Immediate load width | 8 bits per instruction |
 | Primary operations | Register ↔ Register |
+| Stack direction | Descending — `sp` decrements before write on push, increments after read on pop |
 
 ---
 
@@ -27,15 +28,41 @@ A machine architecture design and test suite for a pure 16-bit CPU and associate
 | `0001` | `r1` | Always 1 (hardwired) |
 | `0010` | `ip` | Instruction pointer |
 | `0011` | `sp` | Stack pointer |
-| `0100` | `is` | Instruction segment |
-| `0101` | `as` | Address segment |
-| `0110` | `ss` | Stack segment |
-| `0111` | `fl` | Flags (directly accessible) |
-| `1000`–`1111` | `r8`–`r15` | General purpose |
+| `0100` | `fl` | Flags (directly accessible) |
+| `0101`–`1111` | `r5`–`r15` | General purpose (11 registers) |
 
 ---
 
-## Instruction Encoding
+## Flags Register
+
+The flags register (`fl`) is directly readable and writable as a general purpose register. All 16 bits are defined — no undefined flag behavior.
+
+| Bit | Flag | Name | Set When |
+|---|---|---|---|
+| 0 | `Z` | Zero | Result is zero |
+| 1 | `N` | Negative | Result is negative (bit 15 set) |
+| 2 | `C` | Carry | Unsigned overflow, or borrow on subtract |
+| 3 | `V` | Overflow | Signed overflow, or result clamped |
+| 4 | `FZ` | Float Zero | Float result underflowed to zero |
+| 5 | `FN` | Float NaN | Float result is Not a Number |
+| 6 | `FI` | Float Infinity | Float result is ±infinity |
+| 7 | `FD` | Float Denormal | Float operation encountered a denormal input |
+| 8 | `P` | Parity | XOR of all result bits is 1 (odd parity) |
+| 9 | `S` | Saturated | `sadd` or `ssub` clamped the result |
+| 10 | `IE` | Interrupt Enable | Interrupts are currently enabled |
+| 11–15 | — | Reserved | Always 0, reserved for future use |
+
+### Notes
+
+- `fl` being a regular register means the entire flag state can be saved and restored with a single `mov` — useful for interrupt handlers and nested conditionals
+- Float flags (`FZ`, `FN`, `FI`, `FD`) are sticky — they remain set until explicitly cleared, matching IEEE 754 exception flag behavior. This allows detection of exceptional conditions across multiple float operations
+- `S` is distinct from `V` — saturation is intentional clamping, overflow is an error condition
+- `IE` being in the flags register means enabling/disabling interrupts is a bitwise `or`/`and` operation on `fl`
+- Reserved bits always read as 0 and writes are silently ignored
+
+---
+
+
 
 The top 2 bits (`tt`) define the instruction type:
 
@@ -222,7 +249,7 @@ Unary instructions operate on a single register and carry a 4-bit predicate fiel
 | `10111` | `abs` | Integer absolute value |
 | `11000` | `sext` | Sign extend |
 | `11001` | `set` | Set register to 1 (materializes predicate) |
-| `11010` | `nop` | No operation |
+| `11010` | — | Reserved |
 | `11011` | `halt` | Halt execution |
 
 ---
@@ -235,6 +262,138 @@ Unary instructions operate on a single register and carry a 4-bit predicate fiel
 | `11101` | — | Reserved |
 | `11110` | — | Reserved |
 | `11111` | — | Reserved |
+
+---
+
+## Opcode Reference
+
+### Flag Key
+
+| Symbol | Meaning |
+|---|---|
+| `✓` | Set based on result |
+| `0` | Always cleared |
+| `—` | Unaffected |
+| `*` | See note |
+
+Flags: **Z** = zero, **N** = negative, **C** = carry/borrow, **V** = signed overflow
+
+---
+
+### Defined Edge Cases
+
+All operations have defined behavior in every case, including:
+
+| Situation | Defined Behavior |
+|---|---|
+| `div` or `mod` by zero | V set, result is 0 |
+| `fsqrt` of negative | V set, result is 0.0 |
+| `ftoi` out of range | V set, result clamps to 0x7FFF (positive overflow) or 0x8000 (negative overflow) |
+| `neg` of 0x8000 | V set, result is 0x8000 (no positive representation in 16-bit two's complement) |
+| `abs` of 0x8000 | V set, result is 0x8000 (no positive representation in 16-bit two's complement) |
+| `clz` of 0xFFFF | result is 0, Z set |
+| `ctz` of 0xFFFF | result is 0, Z set |
+| `shl`/`shr`/`sar` by 0 | result unchanged, C clear |
+| `shl`/`shr`/`sar` by ≥16 | result is 0 (0xFFFF for `sar` on negative value), C clear |
+| write to `r0` or `r1` | silently ignored, register retains hardwired value |
+
+---
+
+
+
+For float ops, C and V are not meaningful in the traditional integer sense. `fcmp` is the exception — it must set flags usefully for conditional branches to work on float results.
+
+| Op | Result | Z | N | C | V | Notes |
+|---|---|---|---|---|---|---|
+| `fadd` | `dst ← dst + src` | ✓ | ✓ | — | — | |
+| `fsub` | `dst ← dst - src` | ✓ | ✓ | — | — | |
+| `fmul` | `dst ← dst × src` | ✓ | ✓ | — | — | |
+| `fdiv` | `dst ← dst / src` | ✓ | ✓ | — | — | |
+| `fmod` | `dst ← dst mod src` | ✓ | ✓ | — | — | |
+| `fcmp` | flags from `dst - src` | ✓ | ✓ | * | — | C set if unordered (NaN involved) |
+| `fmin` | `dst ← min(dst, src)` | ✓ | ✓ | — | — | |
+| `fmax` | `dst ← max(dst, src)` | ✓ | ✓ | — | — | |
+
+---
+
+### Micro-Immediate Integer Operations
+
+`#n` denotes the 4-bit immediate (0–15) or zero-page value.
+
+| Op | Result | Z | N | C | V | Notes |
+|---|---|---|---|---|---|---|
+| `shl #n` | `dst ← dst << n` | ✓ | ✓ | * | — | C = last bit shifted out |
+| `shr #n` | `dst ← dst >> n` | ✓ | ✓ | * | — | C = last bit shifted out, zero fill |
+| `sar #n` | `dst ← dst >>> n` | ✓ | ✓ | * | — | C = last bit shifted out, sign fill |
+| `add #n` | `dst ← dst + n` | ✓ | ✓ | ✓ | ✓ | |
+| `sub #n` | `dst ← dst - n` | ✓ | ✓ | ✓ | ✓ | C = borrow |
+| `and #n` | `dst ← dst & n` | ✓ | ✓ | 0 | 0 | |
+| `cmp #n` | flags from `dst - n` | ✓ | ✓ | ✓ | ✓ | No result stored |
+| `or #n`  | `dst ← dst \| n` | ✓ | ✓ | 0 | 0 | |
+
+---
+
+### Standard Integer ALU Operations
+
+| Op | Result | Z | N | C | V | Notes |
+|---|---|---|---|---|---|---|
+| `add` | `dst ← dst + src` | ✓ | ✓ | ✓ | ✓ | |
+| `addc` | `dst ← dst + src + C` | ✓ | ✓ | ✓ | ✓ | Includes carry in |
+| `sub` | `dst ← dst - src` | ✓ | ✓ | ✓ | ✓ | C = borrow |
+| `subb` | `dst ← dst - src - C` | ✓ | ✓ | ✓ | ✓ | C = borrow, includes borrow in |
+| `mul` | `dst ← dst × src` | ✓ | ✓ | * | * | C and V set if result exceeds 16 bits |
+| `div` | `dst ← dst / src` | ✓ | ✓ | 0 | * | V set on divide by zero |
+| `mod` | `dst ← dst mod src` | ✓ | ✓ | 0 | * | V set on divide by zero |
+| `and` | `dst ← dst & src` | ✓ | ✓ | 0 | 0 | |
+| `or`  | `dst ← dst \| src` | ✓ | ✓ | 0 | 0 | |
+| `xor` | `dst ← dst ^ src` | ✓ | ✓ | 0 | 0 | |
+| `shl` | `dst ← dst << src` | ✓ | ✓ | * | — | C = last bit shifted out |
+| `shr` | `dst ← dst >> src` | ✓ | ✓ | * | — | C = last bit shifted out, zero fill |
+| `sar` | `dst ← dst >>> src` | ✓ | ✓ | * | — | C = last bit shifted out, sign fill |
+| `cmp` | flags from `dst - src` | ✓ | ✓ | ✓ | ✓ | No result stored |
+| `test` | flags from `dst & src` | ✓ | ✓ | 0 | 0 | No result stored |
+| `mov` | `dst ← src` | ✓ | ✓ | — | — | |
+
+---
+
+### FPU Unary Operations
+
+| Op | Result | Z | N | C | V | Notes |
+|---|---|---|---|---|---|---|
+| `fneg` | `dst ← -dst` | ✓ | ✓ | — | — | |
+| `fabs` | `dst ← \|dst\|` | ✓ | 0 | — | — | Result always positive |
+| `fsqrt` | `dst ← √dst` | ✓ | 0 | — | * | V set if input negative |
+| `ftoi` | `dst ← (int)dst` | ✓ | ✓ | — | * | V set on out-of-range conversion |
+| `itof` | `dst ← (float)dst` | ✓ | ✓ | — | — | |
+| `ffloor` | `dst ← floor(dst)` | ✓ | ✓ | — | — | Float result |
+| `fceil` | `dst ← ceil(dst)` | ✓ | ✓ | — | — | Float result |
+| `fround` | `dst ← round(dst)` | ✓ | ✓ | — | — | Float result |
+
+---
+
+### ALU Unary Operations
+
+| Op | Result | Z | N | C | V | Notes |
+|---|---|---|---|---|---|---|
+| `jmp` | `ip ← dst` | — | — | — | — | |
+| `jmprelative` | `ip ← ip + dst` | — | — | — | — | |
+| `call` | `[sp] ← ip, sp ← sp-1, ip ← dst` | — | — | — | — | |
+| `callrelative` | `[sp] ← ip, sp ← sp-1, ip ← ip+dst` | — | — | — | — | |
+| `ret` | `sp ← sp+1, ip ← [sp]` | — | — | — | — | |
+| `push` | `sp ← sp-1, [sp] ← dst` | — | — | — | — | |
+| `pop` | `dst ← [sp], sp ← sp+1` | — | — | — | — | |
+| `not` | `dst ← ~dst` | ✓ | ✓ | 0 | 0 | |
+| `rol` | `dst ← rol(dst)` | ✓ | ✓ | * | — | C = bit 15 rotated out |
+| `ror` | `dst ← ror(dst)` | ✓ | ✓ | * | — | C = bit 0 rotated out |
+| `clz` | `dst ← count_leading_zeros(dst)` | ✓ | 0 | — | — | Z set if dst was 0xFFFF |
+| `ctz` | `dst ← count_trailing_zeros(dst)` | ✓ | 0 | — | — | Z set if dst was 0xFFFF |
+| `popcount` | `dst ← count_set_bits(dst)` | ✓ | 0 | — | — | Result always 0–16 |
+| `bswap` | `dst ← swap_bytes(dst)` | ✓ | ✓ | — | — | Swaps high and low bytes |
+| `neg` | `dst ← -dst` | ✓ | ✓ | ✓ | * | V set if dst was 0x8000 |
+| `abs` | `dst ← \|dst\|` | ✓ | 0 | — | * | V set if dst was 0x8000 |
+| `sext` | `dst ← sign_extend(dst[7:0])` | ✓ | ✓ | — | — | Extends low byte to 16 bits |
+| `set` | `dst ← 1` | — | — | — | — | Predicate controls execution, not result |
+| `halt` | stop execution | — | — | — | — | |
 
 ---
 
